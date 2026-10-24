@@ -21,11 +21,11 @@ pub struct Header {
 
 fn parse_vendor(v: u16) -> [char; 3] {
 	let mask: u8 = 0x1F; // Each letter is 5 bits
-	let i0 = ('A' as u8) - 1; // 0x01 = A
+	let i0 = b'A' - 1; // 0x01 = A
 	[
 		(((v >> 10) as u8 & mask) + i0) as char,
-		(((v >> 5) as u8 & mask) + i0) as char,
-		(((v >> 0) as u8 & mask) + i0) as char,
+		(((v >> 5)  as u8 & mask) + i0) as char,
+		(( v        as u8 & mask) + i0) as char,
 	]
 }
 
@@ -323,7 +323,7 @@ mod tests {
 			chromaticity: (),
 			established_timing: (),
 			standard_timing: (),
-			descriptors: vec!(
+			descriptors: vec![
 				Descriptor::DetailedTiming(DetailedTiming {
 					pixel_clock: 146250,
 					horizontal_active_pixels: 1680,
@@ -343,7 +343,7 @@ mod tests {
 				Descriptor::RangeLimits,
 				Descriptor::ProductName("SyncMaster".to_string()),
 				Descriptor::SerialNumber("HS3P701105".to_string()),
-			),
+			],
 		};
 
 		test(d, &expected);
@@ -373,7 +373,7 @@ mod tests {
 			chromaticity: (),
 			established_timing: (),
 			standard_timing: (),
-			descriptors: vec!(
+			descriptors: vec![
 				Descriptor::DetailedTiming(DetailedTiming {
 					pixel_clock: 138500,
 					horizontal_active_pixels: 1920,
@@ -393,7 +393,7 @@ mod tests {
 				Descriptor::Dummy,
 				Descriptor::UnspecifiedText("DJCP6ÇLQ133M1".to_string()),
 				Descriptor::Unknown([2, 65, 3, 40, 0, 18, 0, 0, 11, 1, 10, 32, 32]),
-			),
+			],
 		};
 
 		test(d, &expected);

@@ -9,6 +9,7 @@ readme = "README.md"
 categories = ["parser-implementations"]
 license = "MIT"
 authors = ["emersion"]
+edition = "2024"
 
 [dependencies]
 nom = "8.0.0"
