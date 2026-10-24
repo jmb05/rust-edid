@@ -1,7 +1,10 @@
-#[macro_use]
 extern crate nom;
 
-use nom::{be_u16, le_u8, le_u16, le_u32};
+use nom::bytes::complete::{tag, take};
+use nom::combinator::{map, peek};
+use nom::multi::count;
+use nom::number::complete::{be_u16, le_u16, le_u32, le_u8};
+use nom::{IResult, Parser};
 
 mod cp437;
 
@@ -19,24 +22,37 @@ pub struct Header {
 fn parse_vendor(v: u16) -> [char; 3] {
 	let mask: u8 = 0x1F; // Each letter is 5 bits
 	let i0 = ('A' as u8) - 1; // 0x01 = A
-	return [
+	[
 		(((v >> 10) as u8 & mask) + i0) as char,
 		(((v >> 5) as u8 & mask) + i0) as char,
 		(((v >> 0) as u8 & mask) + i0) as char,
 	]
 }
 
-named!(parse_header<&[u8], Header>, do_parse!(
-	tag!(&[0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00][..])
-	>> vendor: be_u16
-	>> product: le_u16
-	>> serial: le_u32
-	>> week: le_u8
-	>> year: le_u8
-	>> version: le_u8
-	>> revision: le_u8
-	>> (Header{vendor: parse_vendor(vendor), product, serial, week, year, version, revision})
-));
+fn parse_header(input: &[u8]) -> IResult<&[u8], Header> {
+	map(
+		(tag(&[0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00][..]),
+		be_u16,
+		le_u16,
+		le_u32,
+		le_u8,
+		le_u8,
+		le_u8,
+		le_u8,
+		),
+		|(_, vendor, product, serial, week, year, version, revision)| {
+			Header {
+				vendor: parse_vendor(vendor),
+				product,
+				serial,
+				week,
+				year,
+				version,
+				revision,
+			}
+		},
+	).parse(input)
+}
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub struct Display {
@@ -47,38 +63,42 @@ pub struct Display {
 	pub features: u8,
 }
 
-named!(parse_display<&[u8], Display>, do_parse!(
-	video_input: le_u8
-	>> width: le_u8
-	>> height: le_u8
-	>> gamma: le_u8
-	>> features: le_u8
-	>> (Display{video_input, width, height, gamma, features})
-));
+fn parse_display(input: &[u8]) -> IResult<&[u8], Display> {
+	map(
+		(le_u8, le_u8, le_u8, le_u8, le_u8),
+		|(video_input, width, height, gamma, features)| {
+			Display {
+				video_input,
+				width,
+				height,
+				gamma,
+				features
+			}
+		},
+	).parse(input)
+}
 
-named!(parse_chromaticity<&[u8], ()>, do_parse!(
-	take!(10) >> ()
-));
+fn parse_chromaticity(input: &[u8]) -> IResult<&[u8], ()> {
+	map(take(10usize), |_| ()).parse(input)
+}
 
-named!(parse_established_timing<&[u8], ()>, do_parse!(
-	take!(3) >> ()
-));
+fn parse_established_timing(input: &[u8]) -> IResult<&[u8], ()> {
+	map(take(3usize), |_| ()).parse(input)
+}
 
-named!(parse_standard_timing<&[u8], ()>, do_parse!(
-	take!(16) >> ()
-));
+fn parse_standard_timing(input: &[u8]) -> IResult<&[u8], ()> {
+	map(take(16usize), |_| ()).parse(input)
+}
 
-named!(parse_descriptor_text<&[u8], String>,
-	map!(
-		map!(take!(13), |b| {
-			b.iter()
-			.filter(|c| **c != 0x0A)
-			.map(|b| cp437::forward(*b))
-			.collect::<String>()
-		}),
-		|s| s.trim().to_string()
-	)
-);
+fn parse_descriptor_text(input: &[u8]) -> IResult<&[u8], String> {
+	map(
+		map(
+			take(13usize), |b: &[u8]| {
+				b.iter().filter(|c| **c != 0x0A).map(|b| cp437::forward(*b)).collect::<String>()
+			}
+		), |s| s.trim().to_string()
+	).parse(input)
+}
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub struct DetailedTiming {
@@ -103,49 +123,38 @@ pub struct DetailedTiming {
 	pub features: u8, /* TODO add enums etc. */
 }
 
-named!(parse_detailed_timing<&[u8], DetailedTiming>, do_parse!(
-	pixel_clock_10khz: le_u16
-	>> horizontal_active_lo: le_u8
-	>> horizontal_blanking_lo: le_u8
-	>> horizontal_px_hi: le_u8
-	>> vertical_active_lo: le_u8
-	>> vertical_blanking_lo: le_u8
-	>> vertical_px_hi: le_u8
-	>> horizontal_front_porch_lo: le_u8
-	>> horizontal_sync_width_lo: le_u8
-	>> vertical_lo: le_u8
-	>> porch_sync_hi: le_u8
-	>> horizontal_size_lo: le_u8
-	>> vertical_size_lo: le_u8
-	>> size_hi: le_u8
-	>> horizontal_border: le_u8
-	>> vertical_border: le_u8
-	>> features: le_u8
-	>> (DetailedTiming {
-		pixel_clock: pixel_clock_10khz as u32 * 10,
-		horizontal_active_pixels: (horizontal_active_lo as u16) |
-		                          (((horizontal_px_hi >> 4) as u16) << 8),
-		horizontal_blanking_pixels: (horizontal_blanking_lo as u16) |
-		                            (((horizontal_px_hi & 0xf) as u16) << 8),
-		vertical_active_lines: (vertical_active_lo as u16) |
-		                       (((vertical_px_hi >> 4) as u16) << 8),
-		vertical_blanking_lines: (vertical_blanking_lo as u16) |
-		                         (((vertical_px_hi & 0xf) as u16) << 8),
-		horizontal_front_porch: (horizontal_front_porch_lo as u16) |
-		                        (((porch_sync_hi >> 6) as u16) << 8),
-		horizontal_sync_width: (horizontal_sync_width_lo as u16) |
-		                       ((((porch_sync_hi >> 4) & 0x3) as u16) << 8),
-		vertical_front_porch: ((vertical_lo >> 4) as u16) |
-		                      ((((porch_sync_hi >> 2) & 0x3) as u16) << 8),
-		vertical_sync_width: ((vertical_lo & 0xf) as u16) |
-		                     (((porch_sync_hi & 0x3) as u16) << 8),
-		horizontal_size: (horizontal_size_lo as u16) | (((size_hi >> 4) as u16) << 8),
-		vertical_size: (vertical_size_lo as u16) | (((size_hi & 0xf) as u16) << 8),
-		horizontal_border_pixels: horizontal_border,
-		vertical_border_pixels: vertical_border,
-		features: features
-	})
-));
+fn parse_detailed_timing(input: &[u8]) -> IResult<&[u8], DetailedTiming> {
+	map(
+		(le_u16, le_u8, le_u8, le_u8, le_u8, le_u8, le_u8, le_u8, le_u8, le_u8, le_u8, le_u8, le_u8, le_u8, le_u8, le_u8, le_u8),
+		|(pixel_clock_10khz, horizontal_active_lo, horizontal_blanking_lo, horizontal_px_hi, vertical_active_lo, vertical_blanking_lo, vertical_px_hi, horizontal_front_porch_lo, horizontal_sync_width_lo, vertical_lo
+					, porch_sync_hi, horizontal_size_lo, vertical_size_lo, size_hi, horizontal_border, vertical_border, features)| {
+			DetailedTiming {
+				pixel_clock: pixel_clock_10khz as u32 * 10,
+				horizontal_active_pixels: (horizontal_active_lo as u16) |
+					(((horizontal_px_hi >> 4) as u16) << 8),
+				horizontal_blanking_pixels: (horizontal_blanking_lo as u16) |
+					(((horizontal_px_hi & 0xf) as u16) << 8),
+				vertical_active_lines: (vertical_active_lo as u16) |
+					(((vertical_px_hi >> 4) as u16) << 8),
+				vertical_blanking_lines: (vertical_blanking_lo as u16) |
+					(((vertical_px_hi & 0xf) as u16) << 8),
+				horizontal_front_porch: (horizontal_front_porch_lo as u16) |
+					(((porch_sync_hi >> 6) as u16) << 8),
+				horizontal_sync_width: (horizontal_sync_width_lo as u16) |
+					((((porch_sync_hi >> 4) & 0x3) as u16) << 8),
+				vertical_front_porch: ((vertical_lo >> 4) as u16) |
+					((((porch_sync_hi >> 2) & 0x3) as u16) << 8),
+				vertical_sync_width: ((vertical_lo & 0xf) as u16) |
+					(((porch_sync_hi & 0x3) as u16) << 8),
+				horizontal_size: (horizontal_size_lo as u16) | (((size_hi >> 4) as u16) << 8),
+				vertical_size: (vertical_size_lo as u16) | (((size_hi & 0xf) as u16) << 8),
+				horizontal_border_pixels: horizontal_border,
+				vertical_border_pixels: vertical_border,
+				features
+			}
+		}
+	).parse(input)
+}
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Descriptor {
@@ -163,75 +172,84 @@ pub enum Descriptor {
 	Unknown([u8; 13]),
 }
 
-named!(parse_descriptor<&[u8], Descriptor>,
-	switch!(peek!(le_u16),
-		0 => do_parse!(
-			take!(3)
-			>> d: switch!(le_u8,
-				0xFF => do_parse!(
-					take!(1)
-					>> s: parse_descriptor_text
-					>> (Descriptor::SerialNumber(s))
-				) |
-				0xFE => do_parse!(
-					take!(1)
-					>> s: parse_descriptor_text
-					>> (Descriptor::UnspecifiedText(s))
-				) |
-				0xFD => do_parse!(
-					take!(1)
-					>> take!(13)
-					>> (Descriptor::RangeLimits)
-				) |
-				0xFC => do_parse!(
-					take!(1)
-					>> s: parse_descriptor_text
-					>> (Descriptor::ProductName(s))
-				) |
-				0xFB => do_parse!(
-					take!(1)
-					>> take!(13)
-					>> (Descriptor::WhitePoint)
-				) |
-				0xFA => do_parse!(
-					take!(1)
-					>> take!(13)
-					>> (Descriptor::StandardTiming)
-				) |
-				0xF9 => do_parse!(
-					take!(1)
-					>> take!(13)
-					>> (Descriptor::ColorManagement)
-				) |
-				0xF8 => do_parse!(
-					take!(1)
-					>> take!(13)
-					>> (Descriptor::TimingCodes)
-				) |
-				0xF7 => do_parse!(
-					take!(1)
-					>> take!(13)
-					>> (Descriptor::EstablishedTimings)
-				) |
-				0x10 => do_parse!(
-					take!(1)
-					>> take!(13)
-					>> (Descriptor::Dummy)
-				) |
-				_ => do_parse!(
-					take!(1)
-					>> data: count_fixed!(u8, le_u8, 13)
-					>> (Descriptor::Unknown(data))
-				)
-			)
-			>> (d)
-		) |
-		_ => do_parse!(
-			d: parse_detailed_timing
-			>> (Descriptor::DetailedTiming(d))
-		)
-	)
-);
+fn parse_descriptor(input: &[u8]) -> IResult<&[u8], Descriptor> {
+	let (input2, kind) = peek(le_u16).parse(input)?;
+	assert_eq!(input, input2);
+
+	if kind == 0 {
+		let (input, kind) = take(2usize)(input)?;
+		let (input, a) = take(1usize)(input)?;
+		println!("Found kind: {kind:?} {a:?}");
+		parse_descriptor_body(input)
+	} else {
+		let (input, d) = parse_detailed_timing(input)?;
+		Ok((input, Descriptor::DetailedTiming(d)))
+	}
+}
+
+fn parse_descriptor_body(input: &[u8]) -> IResult<&[u8], Descriptor> {
+	let (input, tag) = le_u8(input)?;
+
+	match tag {
+		0xFF => {
+			let (input, _) = take(1usize)(input)?;
+			let (input, s) = parse_descriptor_text(input)?;
+			Ok((input, Descriptor::SerialNumber(s)))
+		},
+		0xFE => {
+			let (input, _) = take(1usize)(input)?;
+			let (input, s) = parse_descriptor_text(input)?;
+			Ok((input, Descriptor::UnspecifiedText(s)))
+		}
+	    0xFD => {
+			let (input, _) = take(1usize)(input)?;
+			let (input, _) = take(13usize)(input)?;
+			Ok((input, Descriptor::RangeLimits))
+		}
+		0xFC => {
+			let (input, _) = take(1usize)(input)?;
+			let (input, s) = parse_descriptor_text(input)?;
+			Ok((input, Descriptor::ProductName(s)))
+		}
+		0xFB => {
+			let (input, _) = take(1usize)(input)?;
+			let (input, _) = take(13usize)(input)?;
+			Ok((input, Descriptor::WhitePoint))
+		}
+		0xFA => {
+			let (input, _) = take(1usize)(input)?;
+			let (input, _) = take(13usize)(input)?;
+			Ok((input, Descriptor::StandardTiming))
+		}
+		0xF9 => {
+			let (input, _) = take(1usize)(input)?;
+			let (input, _) = take(13usize)(input)?;
+			Ok((input, Descriptor::ColorManagement))
+		}
+		0xF8 => {
+			let (input, _) = take(1usize)(input)?;
+			let (input, _) = take(13usize)(input)?;
+			Ok((input, Descriptor::TimingCodes))
+		}
+		0xF7 => {
+			let (input, _) = take(1usize)(input)?;
+			let (input, _) = take(13usize)(input)?;
+			Ok((input, Descriptor::EstablishedTimings))
+		}
+		0x10 => {
+			let (input, _) = take(1usize)(input)?;
+			let (input, _) = take(13usize)(input)?;
+			Ok((input, Descriptor::Dummy))
+		}
+		_ => {
+			let (input, _) = take(1usize)(input)?;
+			let (input, data) = take(13usize)(input)?;
+			let mut bytes = [0u8; 13];
+			bytes.copy_from_slice(data);
+			Ok((input, Descriptor::Unknown(bytes)))
+		}
+	}
+}
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct EDID {
@@ -243,19 +261,23 @@ pub struct EDID {
 	pub descriptors: Vec<Descriptor>,
 }
 
-named!(parse_edid<&[u8], EDID>, do_parse!(
-	header: parse_header
-	>> display: parse_display
-	>> chromaticity: parse_chromaticity
-	>> established_timing: parse_established_timing
-	>> standard_timing: parse_standard_timing
-	>> descriptors: count!(parse_descriptor, 4)
-	>> take!(1) // number of extensions
-	>> take!(1) // checksum
-	>> (EDID{header, display, chromaticity, established_timing, standard_timing, descriptors})
-));
+fn parse_edid(input: &[u8]) -> IResult<&[u8], EDID> {
+	map(
+		(parse_header, parse_display, parse_chromaticity, parse_established_timing, parse_standard_timing, count(parse_descriptor, 4), take(1usize), take(1usize)),
+		|(header, display, chromaticity, established_timing, standard_timing, descriptors, _, _)| {
+			EDID {
+				header,
+				display,
+				chromaticity,
+				established_timing,
+				standard_timing,
+				descriptors,
+			}
+		}
+	).parse(input)
+}
 
-pub fn parse(data: &[u8]) -> nom::IResult<&[u8], EDID> {
+pub fn parse(data: &[u8]) -> IResult<&[u8], EDID> {
 	parse_edid(data)
 }
 
@@ -265,16 +287,15 @@ mod tests {
 
 	fn test(d: &[u8], expected: &EDID) {
 		match parse(d) {
-			nom::IResult::Done(remaining, parsed) => {
-				assert_eq!(remaining.len(), 0);
+			Ok((remaining, parsed)) => {
+				println!("{:?}", remaining);
+				println!("{:?}", parsed);
 				assert_eq!(&parsed, expected);
-			},
-			nom::IResult::Error(err) => {
-				panic!(format!("{}", err));
-			},
-			nom::IResult::Incomplete(_) => {
-				panic!("Incomplete");
-			},
+				assert_eq!(remaining.len(), 0);
+			}
+			Err(err) => {
+				panic!("{}", err);
+			}
 		}
 	}
 
