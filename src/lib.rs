@@ -177,9 +177,8 @@ fn parse_descriptor(input: &[u8]) -> IResult<&[u8], Descriptor> {
 	assert_eq!(input, input2);
 
 	if kind == 0 {
-		let (input, kind) = take(2usize)(input)?;
-		let (input, a) = take(1usize)(input)?;
-		println!("Found kind: {kind:?} {a:?}");
+		let (input, _) = take(2usize)(input)?;
+		let (input, _) = take(1usize)(input)?;
 		parse_descriptor_body(input)
 	} else {
 		let (input, d) = parse_detailed_timing(input)?;
@@ -288,8 +287,6 @@ mod tests {
 	fn test(d: &[u8], expected: &EDID) {
 		match parse(d) {
 			Ok((remaining, parsed)) => {
-				println!("{:?}", remaining);
-				println!("{:?}", parsed);
 				assert_eq!(&parsed, expected);
 				assert_eq!(remaining.len(), 0);
 			}
